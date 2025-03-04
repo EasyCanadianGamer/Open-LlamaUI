@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import { getCharacters, importCharacterData, deleteCharacter } from '../utils/chatdb'; // Import IndexedDB functions
 
 interface ChatMessage {
   id: number;
@@ -6,91 +8,193 @@ interface ChatMessage {
   isAI: boolean;
 }
 
-const ChatUI = () => {
+interface Character {
+  id: string; // Change `id` type to `string` to match IndexedDB
+  name: string;
+  description?: string;
+  personality?: string;
+  scenario?: string;
+  first_mes?: string;
+  mes_example?: string;
+  creatorcomment?: string;
+  avatar?: string;
+  chat?: string;
+  talkativeness?: string;
+  fav?: boolean;
+  tags?: string[];
+  spec?: string;
+  spec_version?: string;
+  data?: any;
+}
+
+interface ChatUIProps {
+  characterData: string;
+  setCharacters: React.Dispatch<React.SetStateAction<Character[]>>;
+}
+
+const ChatUI: React.FC<ChatUIProps> = ({ characterData, setCharacters }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [selectedCharacter, setSelectedCharacter] = useState<string | null>(null); // Change type to `string`
+  const [characters, setCharactersState] = useState<Character[]>([]);
 
-  const handleSendMessage = () => {
-    if (input.trim() === '') return;
+  // Fetch all characters from IndexedDB when component mounts
+  useEffect(() => {
+    const fetchCharacters = async () => {
+      const savedCharacters = await getCharacters();
+      setCharactersState(savedCharacters);
+      setCharacters(savedCharacters); // Sync with parent state
+    };
+    fetchCharacters();
+  }, [setCharacters]);
 
-    // Add user message
+  // Import character data and save it to IndexedDB
+  useEffect(() => {
+    if (characterData) {
+      importCharacterData(characterData).then(() => {
+        // After import, refresh characters list
+        const fetchCharacters = async () => {
+          const savedCharacters = await getCharacters();
+          setCharactersState(savedCharacters);
+          setCharacters(savedCharacters);
+        };
+        fetchCharacters();
+      });
+    }
+  }, [characterData, setCharacters]);
+
+
+  const handleSendMessage = async () => {
+    if (input.trim() === '' || !selectedCharacter) return;
+  
+    const character = characters.find((char) => char.id === selectedCharacter);
+    if (!character) {
+      console.error('Selected character not found');
+      return;
+    }
+  
     const newMessage: ChatMessage = { id: Date.now(), text: input, isAI: false };
     setMessages([...messages, newMessage]);
-
-    // Simulate AI response
-    setTimeout(() => {
+  
+    try {
+      const response = await axios.post('http://localhost:3000/api/chat', {
+        message: input,
+        character: {
+          name: character.name,
+          personality: character.personality || "",
+          scenario: character.scenario || "",
+          first_mes: character.first_mes || "",
+          mes_example: character.mes_example || "",
+          creator_comment: character.creatorcomment || "",
+          talkativeness: character.talkativeness || 0.5,
+        },
+      });
+  
+      console.log("AI Response:", response.data); // Debugging log
+  
+      // Ensure only the AI text response is added to the chat
       const aiMessage: ChatMessage = {
         id: Date.now() + 1,
-        text: `AI response to: ${input}`,
+        text: response.data.text || "No response",
         isAI: true,
       };
+  
       setMessages((prev) => [...prev, aiMessage]);
-    }, 1000);
-
+    } catch (error) {
+      console.error('Error fetching AI response:', error);
+    }
+  
     setInput('');
   };
-
-  const handleRegenerate = (id: number) => {
-    const messageToRegenerate = messages.find((msg) => msg.id === id);
-    if (messageToRegenerate) {
-      const regeneratedMessage: ChatMessage = {
-        id: Date.now(),
-        text: `Regenerated response for: ${messageToRegenerate.text}`,
-        isAI: true,
-      };
-      setMessages((prev) => [...prev, regeneratedMessage]);
-    }
-  };
+  
+  
 
   const handleDelete = (id: number) => {
     setMessages(messages.filter((msg) => msg.id !== id));
   };
 
+  // Handle deleting a character from IndexedDB and local state
+  const handleDeleteCharacter = async (id: string) => { // Change parameter type to `string`
+    try {
+      await deleteCharacter(id); // Delete from IndexedDB
+      setCharactersState((prev) => prev.filter((char) => char.id !== id)); // Update local state
+      setCharacters((prev) => prev.filter((char) => char.id !== id)); // Sync with parent state
+    } catch (error) {
+      console.error('Error deleting character:', error);
+    }
+  };
+
   return (
-    <div className="flex flex-col h-full border border-gray-300 rounded p-4">
-      <div className="flex-grow overflow-y-auto space-y-4">
-        {messages.map((msg) => (
-        <div
-        key={msg.id}
-        className={`p-3 rounded ${
-          msg.isAI ? 'bg-blue-100 text-gray-800' : 'bg-gray-100 text-gray-900'
-        } relative group`}
-      >
-        <p>{msg.text}</p>
-        {msg.isAI && (
-          <div className="absolute top-1/2 -translate-y-1/2 right-0 flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button
-              className="bg-gray-200 p-2 rounded hover:bg-gray-300"
-              onClick={() => handleRegenerate(msg.id)}
-            >
-              Regenerate
-            </button>
-            <button
-              className="bg-red-200 p-2 rounded hover:bg-red-300"
-              onClick={() => handleDelete(msg.id)}
-            >
-              Delete
-            </button>
-          </div>
-        )}
-      </div>
-      
-        ))}
-      </div>
-      <div className="mt-4 flex items-center space-x-2">
-        <input
-          type="text"
-          className="flex-grow p-2 border border-gray-300 rounded"
-          placeholder="Type a message..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-        />
-        <button
-          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-          onClick={handleSendMessage}
+    <div className="max-w-4xl mx-auto p-6 bg-white rounded-lg shadow-md">
+      <div className="mb-6">
+        <h3 className="text-2xl font-semibold mb-2">Select a Character</h3>
+        <select
+          onChange={(e) => setSelectedCharacter(e.target.value)} // Use `e.target.value` directly (it's a string)
+          value={selectedCharacter || ''}
+          className="w-full p-2 border rounded-md"
         >
-          Send
-        </button>
+          <option value="">Select Character</option>
+          {characters.map((character) => (
+            <option key={character.id} value={character.id}>
+              {character.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="mb-6">
+        <h2 className="text-2xl font-semibold mb-4">Chat</h2>
+        <div className="space-y-4 max-h-80 overflow-y-auto p-4 bg-gray-50 rounded-lg">
+          {messages.map((msg) => (
+            <div
+              key={msg.id}
+              className={`p-4 rounded-lg ${msg.isAI ? 'bg-blue-100' : 'bg-gray-200'}`}
+            >
+              <p className="text-lg">{msg.text}</p>
+              {!msg.isAI && (
+                <button
+                  onClick={() => handleDelete(msg.id)}
+                  className="mt-2 text-red-500 hover:text-red-700"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex mt-4">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Type a message..."
+            className="w-full p-3 border rounded-l-md"
+          />
+          <button
+            onClick={handleSendMessage}
+            className="p-3 bg-blue-500 text-white rounded-r-md hover:bg-blue-600"
+          >
+            Send
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-6">
+        <h3 className="text-xl font-semibold mb-4">Saved Characters</h3>
+        <ul className="space-y-3">
+          {characters.map((character) => (
+            <li key={character.id} className="flex justify-between items-center">
+              <span className="text-lg">{character.name}</span>
+              <button
+                onClick={() => handleDeleteCharacter(character.id)} // Pass `character.id` (string)
+                className="text-red-500 hover:text-red-700"
+              >
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
